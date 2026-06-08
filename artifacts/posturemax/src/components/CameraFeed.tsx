@@ -109,19 +109,20 @@ export function CameraFeed({ onResults, drawStatus }: Props) {
       const ds = drawStatusRef.current;
       if (!ds?.showLandmarks || !lm) return;
 
-      // Mirror X since video is mirrored via CSS scaleX(-1)
+      const scaleX = canvas.width / (video.videoWidth || canvas.width);
+      const scaleY = canvas.height / (video.videoHeight || canvas.height);
+
       const toXY = (p: any) => ({
-        x: (1 - p.x) * canvas.width,
-        y: p.y * canvas.height,
+        x: p.x * (video.videoWidth || canvas.width) * scaleX,
+        y: p.y * (video.videoHeight || canvas.height) * scaleY,
       });
 
       const GREEN = "#22C55E";
       const RED = "#EF4444";
-      const WHITE50 = "rgba(255,255,255,0.5)";
 
-      const noseColor = ds.noseOk ? GREEN : RED;
       const earColor = ds.earOk ? GREEN : RED;
       const shColor = ds.shouldersOk ? GREEN : RED;
+      const noseColor = ds.noseOk ? GREEN : RED;
 
       // Line: ear to ear
       if (lm[7] && lm[8]) {
@@ -147,22 +148,7 @@ export function CameraFeed({ onResults, drawStatus }: Props) {
         ctx.stroke();
       }
 
-      // Nose to ear midpoint vertical reference line
-      if (lm[0] && lm[7] && lm[8]) {
-        const nose = toXY(lm[0]);
-        const earMid = {
-          x: (toXY(lm[7]).x + toXY(lm[8]).x) / 2,
-          y: (toXY(lm[7]).y + toXY(lm[8]).y) / 2,
-        };
-        ctx.strokeStyle = WHITE50;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(nose.x, nose.y);
-        ctx.lineTo(earMid.x, earMid.y);
-        ctx.stroke();
-      }
-
-      // Dots
+      // 5 dots only: nose, right ear, left ear, left shoulder, right shoulder
       const dot = (idx: number, color: string) => {
         if (!lm[idx]) return;
         const { x, y } = toXY(lm[idx]);
@@ -175,13 +161,11 @@ export function CameraFeed({ onResults, drawStatus }: Props) {
         ctx.shadowBlur = 0;
       };
 
-      dot(0, noseColor);           // Nose
-      dot(1, noseColor);           // Right eye inner
-      dot(4, noseColor);           // Left eye inner
-      dot(7, earColor);            // Right ear
-      dot(8, earColor);            // Left ear
-      dot(11, shColor);            // Right shoulder
-      dot(12, shColor);            // Left shoulder
+      dot(0, noseColor);   // Nose
+      dot(7, earColor);    // Right ear
+      dot(8, earColor);    // Left ear
+      dot(11, shColor);    // Left shoulder
+      dot(12, shColor);    // Right shoulder
     };
 
     start();
