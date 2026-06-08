@@ -1,0 +1,171 @@
+Now replace ALL mock/hardcoded posture data with REAL MediaPipe detection.
+
+The app must now actually analyze the user's posture from the webcam in real time.
+Remove all demo toggle buttons and hardcoded states.
+Everything must be calculated live from real landmark positions every frame.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+LANDMARK DOTS — EXACT POSITIONS
+━━━━━━━━━━━━━━━━━━━━━━━━
+Draw colored dots on these exact MediaPipe landmarks:
+- Nose: landmark index 0
+- Right eye inner: landmark index 1
+- Left eye inner: landmark index 4
+- Right ear: landmark index 7
+- Left ear: landmark index 8
+- Right shoulder: landmark index 11
+- Left shoulder: landmark index 12
+
+Dot size: 8px radius circle
+Dot color logic:
+- If that body part's check is PASSING → draw GREEN dot (#22C55E)
+- If that body part's check is FAILING → draw RED dot (#EF4444)
+
+Lines to draw between dots:
+- Right ear to Left ear — thin line, same color as ear dots
+- Right shoulder to Left shoulder — thin line, same color as shoulder dots
+- Nose to midpoint between ears — thin vertical reference line, white 50% opacity
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+CALIBRATION — WHAT TO SAVE
+━━━━━━━━━━━━━━━━━━━━━━━━
+When user clicks "Calibrate Now" capture these values from current landmarks and save to localStorage key "posturemax_calibration":
+
+{
+  earDistance: pixel distance between landmark 7 and landmark 8 (this = perfect screen distance),
+  earLevelDiff: Math.abs(landmark7.y - landmark8.y) (this = perfect head level),
+  shoulderLevelDiff: Math.abs(landmark11.y - landmark12.y) (this = perfect shoulder level),
+  noseToShoulderMidX: nose.x minus midpoint of shoulder11.x and shoulder12.x (this = perfect forward lean),
+  timestamp: Date.now()
+}
+
+After saving show "Baseline saved!" and go to live monitor.
+If no calibration exists when opening live monitor — redirect to calibration screen first.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+REAL SCORING LOGIC — runs every frame
+━━━━━━━━━━━━━━━━━━━━━━━━
+Every frame MediaPipe returns landmarks. Run these 3 checks:
+
+── CHECK 1: HEAD TILT ──
+Compare current ear Y difference vs calibration baseline.
+currentEarDiff = Math.abs(landmark7.y - landmark8.y)
+headTiltDeviation = currentEarDiff - calibration.earLevelDiff
+If headTiltDeviation > 0.03 → HEAD FAILING
+Penalty = Math.min(30, headTiltDeviation * 600)
+Alert message: "Level your head — it's tilting to one side"
+
+── CHECK 2: FORWARD LEAN ──
+currentNoseToShoulderX = nose.x - midpoint of (shoulder11.x + shoulder12.x) / 2
+forwardDeviation = Math.abs(currentNoseToShoulderX - calibration.noseToShoulderMidX)
+If forwardDeviation > 0.04 → HEAD FAILING (forward lean)
+Penalty = Math.min(40, forwardDeviation * 500)
+Alert message: "Look up a bit! Your head is leaning forward 👀"
+
+── CHECK 3: SCREEN DISTANCE ──
+currentEarDistance = pixel distance between landmark7 and landmark8
+distanceRatio = currentEarDistance / calibration.earDistance
+If distanceRatio > 1.25 → TOO CLOSE — penalty up to 30
+If distanceRatio < 0.75 → TOO FAR — penalty up to 20
+Alert message too close: "Move back from the screen a bit"
+Alert message too far: "Move closer to the screen"
+
+── CHECK 4: SHOULDER LEVEL ──
+currentShoulderDiff = Math.abs(landmark11.y - landmark12.y)
+shoulderDeviation = currentShoulderDiff - calibration.shoulderLevelDiff
+If shoulderDeviation > 0.03 → SHOULDERS FAILING
+Penalty = Math.min(30, shoulderDeviation * 600)
+Alert message: "Straighten your shoulders — one is higher than the other"
+
+── FINAL SCORE CALCULATION ──
+Start score at 100
+Subtract each failing check's penalty
+Final raw score = 100 - total penalties
+Clamp between 0 and 100
+
+Score smoothing — REQUIRED:
+Keep array of last 15 frame scores
+Display score = average of last 15 scores
+This prevents the number from jumping around
+
+── WHICH CHECK MAPS TO WHICH METRIC CARD ──
+"Head" metric card = CHECK 1 (head tilt) AND CHECK 2 (forward lean)
+  → fails if either check 1 OR check 2 fails
+"Shoulders" metric card = CHECK 4
+"Screen distance" metric card = CHECK 3
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+DOT COLOR LOGIC PER LANDMARK
+━━━━━━━━━━━━━━━━━━━━━━━━
+Nose dot → RED if check 2 fails (forward lean), GREEN if passing
+Right ear dot (#7) → RED if check 1 fails (head tilt), GREEN if passing
+Left ear dot (#8) → RED if check 1 fails (head tilt), GREEN if passing
+Right shoulder dot (#11) → RED if check 4 fails, GREEN if passing
+Left shoulder dot (#12) → RED if check 4 fails, GREEN if passing
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+ALERT MESSAGE LOGIC
+━━━━━━━━━━━━━━━━━━━━━━━━
+Show the alert pill at top center of screen.
+Priority order — show only the worst failing check message:
+1. If forward lean failing → "Look up a bit! 👀"
+2. If head tilt failing → "Level your head"
+3. If shoulders failing → "Straighten your shoulders"
+4. If too close → "Move back from screen"
+5. If too far → "Move closer to screen"
+6. If all passing → show "Great posture! ✓" in green pill
+
+Alert pill style:
+- Failing: dark semi-transparent background, white bold text, red left border
+- Passing: dark semi-transparent background, green text "Great posture! ✓"
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+BROWSER NOTIFICATION ALERT
+━━━━━━━━━━━━━━━━━━━━━━━━
+When smoothed score drops below 70:
+1. Request notification permission if not granted yet
+2. Fire Web Notifications API: title "PostureMax" body = the alert message
+3. Play beep: Web Audio API, oscillator, frequency 440hz, duration 200ms, volume 0.3
+4. Cooldown: do not fire again for 30 seconds after last alert
+5. Only fire if browser tab is not currently focused (user is in another tab working)
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+XP SYSTEM — NOW REAL
+━━━━━━━━━━━━━━━━━━━━━━━━
+Every 60 seconds where smoothed score is above 70 → add 10 XP
+Save to localStorage: posturemax_xp = { total, level }
+Level thresholds:
+0=Sloucher(0), 1=Waking Up(100), 2=Straightening(250),
+3=PostureAware(500), 4=Aligned(900), 5=Balanced(1400),
+6=Upright(2000), 7=PosturePro(2700), 8=ElitePosture(3500),
+9=PostureMaster(5000)
+Update XP bar and level name in top-left panel in real time.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+SESSION TRACKING — NOW REAL
+━━━━━━━━━━━━━━━━━━━━━━━━
+When monitoring starts: record start time
+Every second: track if current score is above or below 70
+  Above 70 = good posture second
+  Below 70 = bad posture second
+When user pauses or closes: save session to localStorage array:
+{
+  date: new Date().toISOString(),
+  duration: total seconds monitored,
+  avgScore: average of all frame scores,
+  goodSeconds: total seconds above 70,
+  badSeconds: total seconds below 70,
+  xpEarned: XP earned this session
+}
+Show real session data in dashboard history table.
+
+━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT RULES
+━━━━━━━━━━━━━━━━━━━━━━━━
+1. Remove ALL hardcoded mock scores — score must come from real landmark math only
+2. Remove the demo toggle button
+3. If MediaPipe landmarks are not detected (person not in frame) — show score as "--" and show "Come back into frame" message
+4. All landmark coordinates from MediaPipe are normalized 0-1 — keep them normalized for ratio comparisons, only convert to pixels for drawing dots on canvas
+5. Canvas dot positions must map correctly: dotX = landmark.x * canvas.width, dotY = landmark.y * canvas.height
+6. Score must update smoothly — no sudden jumps
+7. Must still work when user switches to another tab — camera and detection keep running

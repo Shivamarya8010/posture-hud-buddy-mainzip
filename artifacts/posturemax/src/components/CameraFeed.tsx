@@ -4,16 +4,15 @@ declare global {
   interface Window {
     Pose?: any;
     Camera?: any;
-    drawConnectors?: any;
-    drawLandmarks?: any;
   }
 }
 
-type LandmarkStatus = {
-  head: boolean;
-  shoulders: boolean;
-  distance: boolean;
-};
+export interface DrawStatus {
+  noseOk: boolean;
+  earOk: boolean;
+  shouldersOk: boolean;
+  showLandmarks: boolean;
+}
 
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -28,22 +27,23 @@ function loadScript(src: string): Promise<void> {
 }
 
 interface Props {
-  status?: LandmarkStatus;
-  drawLandmarks?: boolean;
+  onResults?: (lm: any[] | null) => void;
+  drawStatus?: DrawStatus;
 }
 
-export function CameraFeed({ status, drawLandmarks: doDraw = true }: Props) {
+export function CameraFeed({ onResults, drawStatus }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const statusRef = useRef(status);
-  statusRef.current = status;
+  const drawStatusRef = useRef(drawStatus);
+  drawStatusRef.current = drawStatus;
+  const onResultsRef = useRef(onResults);
+  onResultsRef.current = onResults;
 
   useEffect(() => {
     let stream: MediaStream | null = null;
     let pose: any = null;
     let cameraUtil: any = null;
     let stopped = false;
-    let rafId = 0;
 
     const start = async () => {
       try {
@@ -57,12 +57,11 @@ export function CameraFeed({ status, drawLandmarks: doDraw = true }: Props) {
 
         await Promise.all([
           loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"),
-          loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"),
           loadScript("https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"),
         ]);
         if (stopped) return;
 
-        pose = new window.Pose({
+        pose = new window.Pose!({
           locateFile: (file: string) =>
             `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
         });
@@ -72,9 +71,9 @@ export function CameraFeed({ status, drawLandmarks: doDraw = true }: Props) {
           minDetectionConfidence: 0.5,
           minTrackingConfidence: 0.5,
         });
-        pose.onResults(onResults);
+        pose.onResults(handleResults);
 
-        cameraUtil = new window.Camera(videoRef.current, {
+        cameraUtil = new window.Camera!(videoRef.current, {
           onFrame: async () => {
             if (videoRef.current && !stopped) {
               await pose.send({ image: videoRef.current });
@@ -89,40 +88,54 @@ export function CameraFeed({ status, drawLandmarks: doDraw = true }: Props) {
       }
     };
 
-    const onResults = (results: any) => {
+    const handleResults = (results: any) => {
+      const lm: any[] | null = results.poseLandmarks ?? null;
+
+      onResultsRef.current?.(lm);
+
       const canvas = canvasRef.current;
       const video = videoRef.current;
       if (!canvas || !video) return;
+
       const w = video.videoWidth || canvas.clientWidth;
       const h = video.videoHeight || canvas.clientHeight;
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
+
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!doDraw || !results.poseLandmarks) return;
 
-      const lm = results.poseLandmarks;
-      const s = statusRef.current || { head: true, shoulders: true, distance: true };
+      const ds = drawStatusRef.current;
+      if (!ds?.showLandmarks || !lm) return;
 
-      // mirror coords since video is mirrored
-      const toXY = (p: any) => ({ x: (1 - p.x) * canvas.width, y: p.y * canvas.height });
+      // Mirror X since video is mirrored via CSS scaleX(-1)
+      const toXY = (p: any) => ({
+        x: (1 - p.x) * canvas.width,
+        y: p.y * canvas.height,
+      });
 
-      const headColor = s.head ? "#22c55e" : "#ef4444";
-      const shColor = s.shoulders ? "#22c55e" : "#ef4444";
+      const GREEN = "#22C55E";
+      const RED = "#EF4444";
+      const WHITE50 = "rgba(255,255,255,0.5)";
 
-      // connect ears
+      const noseColor = ds.noseOk ? GREEN : RED;
+      const earColor = ds.earOk ? GREEN : RED;
+      const shColor = ds.shouldersOk ? GREEN : RED;
+
+      // Line: ear to ear
       if (lm[7] && lm[8]) {
         const a = toXY(lm[7]);
         const b = toXY(lm[8]);
-        ctx.strokeStyle = headColor;
+        ctx.strokeStyle = earColor;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
         ctx.stroke();
       }
-      // connect shoulders
+
+      // Line: shoulder to shoulder
       if (lm[11] && lm[12]) {
         const a = toXY(lm[11]);
         const b = toXY(lm[12]);
@@ -134,38 +147,52 @@ export function CameraFeed({ status, drawLandmarks: doDraw = true }: Props) {
         ctx.stroke();
       }
 
-      const dot = (idx: number, color: string, r = 7) => {
+      // Nose to ear midpoint vertical reference line
+      if (lm[0] && lm[7] && lm[8]) {
+        const nose = toXY(lm[0]);
+        const earMid = {
+          x: (toXY(lm[7]).x + toXY(lm[8]).x) / 2,
+          y: (toXY(lm[7]).y + toXY(lm[8]).y) / 2,
+        };
+        ctx.strokeStyle = WHITE50;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(nose.x, nose.y);
+        ctx.lineTo(earMid.x, earMid.y);
+        ctx.stroke();
+      }
+
+      // Dots
+      const dot = (idx: number, color: string) => {
         if (!lm[idx]) return;
         const { x, y } = toXY(lm[idx]);
         ctx.fillStyle = color;
         ctx.shadowColor = color;
-        ctx.shadowBlur = 14;
+        ctx.shadowBlur = 12;
         ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
       };
-      dot(0, headColor);
-      dot(7, headColor, 6);
-      dot(8, headColor, 6);
-      dot(11, shColor);
-      dot(12, shColor);
+
+      dot(0, noseColor);           // Nose
+      dot(1, noseColor);           // Right eye inner
+      dot(4, noseColor);           // Left eye inner
+      dot(7, earColor);            // Right ear
+      dot(8, earColor);            // Left ear
+      dot(11, shColor);            // Right shoulder
+      dot(12, shColor);            // Left shoulder
     };
 
     start();
 
     return () => {
       stopped = true;
-      cancelAnimationFrame(rafId);
-      try {
-        cameraUtil?.stop?.();
-      } catch {}
-      try {
-        pose?.close?.();
-      } catch {}
+      try { cameraUtil?.stop?.(); } catch {}
+      try { pose?.close?.(); } catch {}
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [doDraw]);
+  }, []);
 
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
